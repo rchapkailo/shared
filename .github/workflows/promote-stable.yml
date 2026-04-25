@@ -76,8 +76,8 @@ jobs:
           fi
           CURRENT_CANARY=$(DIST_TAGS_JSON="$DIST_TAGS_JSON" node -e "const raw=process.env.DIST_TAGS_JSON||''; let tags; try { tags=JSON.parse(raw); } catch (err) { console.error('Invalid dist-tags JSON for package ${{ steps.package.outputs.name }}'); console.error(raw); process.exit(1); } process.stdout.write(tags.canary||'');")
           if [[ -z "$CURRENT_CANARY" ]]; then
-            echo "No canary dist-tag found for ${{ steps.package.outputs.name }}"
-            exit 1
+            echo "No canary dist-tag found for ${{ steps.package.outputs.name }}. Continuing bootstrap promotion."
+            exit 0
           fi
           if [[ "$CURRENT_CANARY" != "$PARENT_CANARY_VERSION" ]]; then
             echo "Parent canary version ($PARENT_CANARY_VERSION) does not match current canary tag ($CURRENT_CANARY)."
