@@ -48,9 +48,10 @@ jobs:
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           const baseVersion = pkg.version;
-          const now = new Date().toISOString();
-          const utcToken = now.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'z').replace('T', 't');
-          // Example: 0.1.0-canary.20260425t131530z.pr21
+          const now = new Date();
+          const pad = (value) => String(value).padStart(2, '0');
+          const utcToken = `${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}-${now.getUTCFullYear()}-${pad(now.getUTCHours())}-${pad(now.getUTCMinutes())}-${pad(now.getUTCSeconds())}Z`;
+          // Example: 0.1.0-canary.04-25-2026-13-15-30Z.pr21
           pkg.version = `${baseVersion}-canary.${utcToken}.pr${process.env.PR_NUMBER}`;
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
           console.log(`Publishing ${pkg.name}@${pkg.version}`);
