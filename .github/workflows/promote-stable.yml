@@ -1,17 +1,19 @@
-name: Stable Release
+name: Promote Stable
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 9 * * 4"
+    inputs:
+      canary_version:
+        description: Exact canary version to promote (for example 0.1.0-canary.04-25-2026-18-36-08Z.pr10)
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+  packages: write
 
 jobs:
-  publish-stable:
+  promote-stable:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,22 +28,46 @@ jobs:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2.2.0
-        with:
-          bun-version: 1.3.13
+      - name: Read package name
+        id: package
+        run: echo "name=$(node -p \"require('./package.json').name\")" >> "$GITHUB_OUTPUT"
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test
-
-      - name: Build package
-        run: bun run build
-
-      - name: Publish stable release
-        run: npx --yes -p semantic-release -p @semantic-release/commit-analyzer -p @semantic-release/release-notes-generator -p @semantic-release/npm -p @semantic-release/github semantic-release
+      - name: Validate canary input format
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANARY_VERSION: ${{ inputs.canary_version }}
+        run: |
+          if [[ "$CANARY_VERSION" != *-canary.* ]]; then
+            echo "Input canary_version must include '-canary.' segment. Got: $CANARY_VERSION"
+            exit 1
+          fi
+
+      - name: Verify canary package exists
+        env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm view "${{ steps.package.outputs.name }}@${{ inputs.canary_version }}" version
+
+      - name: Verify input matches current canary tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          INPUT_CANARY_VERSION: ${{ inputs.canary_version }}
+        run: |
+          DIST_TAGS_JSON=$(npm view "${{ steps.package.outputs.name }}" dist-tags --json)
+          CURRENT_CANARY=$(node -e "const tags=JSON.parse(process.argv[1]);process.stdout.write(tags.canary||'')" "$DIST_TAGS_JSON")
+          if [[ -z "$CURRENT_CANARY" ]]; then
+            echo "No canary dist-tag found for ${{ steps.package.outputs.name }}"
+            exit 1
+          fi
+          if [[ "$CURRENT_CANARY" != "$INPUT_CANARY_VERSION" ]]; then
+            echo "Input canary_version ($INPUT_CANARY_VERSION) does not match current canary tag ($CURRENT_CANARY)."
+            exit 1
+          fi
+
+      - name: Promote canary to latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm dist-tag add "${{ steps.package.outputs.name }}@${{ inputs.canary_version }}" latest
+
+      - name: Show resulting dist-tags
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: npm view "${{ steps.package.outputs.name }}" dist-tags --json
