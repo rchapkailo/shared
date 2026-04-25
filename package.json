@@ -16,9 +16,9 @@
   "scripts": {
     "build": "bun build ./index.ts --outdir ./dist",
     "test": "bun test",
-    "lint": "oxlint \"**/*.{js,ts}\"",
-    "format:check": "oxfmt --check \"**/*.{js,ts}\"",
-    "format:write": "oxfmt \"**/*.{js,ts}\""
+    "lint": "oxlint \"**/*.js\" \"**/*.ts\"",
+    "format:check": "oxfmt --check \"**/*.js\" \"**/*.ts\"",
+    "format:write": "oxfmt \"**/*.js\" \"**/*.ts\""
   },
   "devDependencies": {
     "@types/bun": "latest",
