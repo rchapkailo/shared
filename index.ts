@@ -1,7 +1,13 @@
 export const REPO_NAME = "shared";
 
-export function getRepoName(): string {
-	return REPO_NAME;
+export interface RepoInfo {
+	name: string;
+	deps: string[];
 }
 
-console.log(`Repo: ${getRepoName()}`);
+export function getRepoInfo(): RepoInfo {
+	return { name: REPO_NAME, deps: [] };
+}
+
+const info = getRepoInfo();
+console.log(`Repo: ${info.name}, deps: ${info.deps.join(", ") || "none"}`);
