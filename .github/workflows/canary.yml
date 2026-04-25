@@ -40,9 +40,6 @@ jobs:
       - name: Run tests
         run: bun test
 
-      - name: Build package
-        run: bun run build
-
       - name: Stamp canary version
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
