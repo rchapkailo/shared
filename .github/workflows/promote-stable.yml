@@ -89,8 +89,8 @@ jobs:
             fi
           done
           if [[ -z "$DIST_TAGS_JSON" ]]; then
-            echo "Could not read dist-tags JSON for ${{ steps.package.outputs.name }}"
-            exit 1
+            echo "Could not read dist-tags JSON for ${{ steps.package.outputs.name }} after retries; treating as empty tags for bootstrap."
+            DIST_TAGS_JSON='{}'
           fi
           CURRENT_CANARY=$(DIST_TAGS_JSON="$DIST_TAGS_JSON" node -e "const raw=process.env.DIST_TAGS_JSON||''; let tags; try { tags=JSON.parse(raw); } catch (err) { console.error('Invalid dist-tags JSON for package ${{ steps.package.outputs.name }}'); console.error(raw); process.exit(1); } process.stdout.write(tags.canary||'');")
           echo "Resolved parent canary: $PARENT_CANARY_VERSION"
