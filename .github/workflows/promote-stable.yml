@@ -97,10 +97,10 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: chore: start next sprint at v${{ steps.next_version.outputs.next }}
+          commit-message: "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
           branch: chore/next-sprint-v${{ steps.next_version.outputs.next }}
           delete-branch: true
-          title: chore: start next sprint at v${{ steps.next_version.outputs.next }}
+          title: "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
           body: |
             This PR updates package.json to the next development baseline after promoting canary to stable.
           base: main
