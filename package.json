@@ -1,25 +1,29 @@
 {
   "name": "@rchapkailo/shared",
   "version": "0.1.0",
-  "module": "./dist/index.js",
-  "main": "./dist/index.js",
-  "types": "./index.d.ts",
-  "type": "module",
   "files": [
-    "dist",
-    "index.d.ts",
+    "index.ts",
     "README.md"
   ],
-  "scripts": {
-    "build": "bun build ./index.ts --outdir ./dist",
-    "test": "bun test"
-  },
+  "type": "module",
+  "main": "./index.ts",
+  "module": "./index.ts",
+  "types": "./index.ts",
   "publishConfig": {
     "access": "public",
     "registry": "https://npm.pkg.github.com"
   },
+  "scripts": {
+    "build": "bun build ./index.ts --outdir ./dist",
+    "test": "bun test",
+    "lint": "oxlint .",
+    "format:check": "oxfmt --check .",
+    "format:write": "oxfmt ."
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "oxfmt": "latest",
+    "oxlint": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
