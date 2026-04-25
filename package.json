@@ -1,8 +1,21 @@
 {
-  "name": "shared",
-  "module": "index.ts",
+  "name": "@romalvivua/shared",
+  "version": "0.1.0",
+  "module": "./dist/index.js",
+  "main": "./dist/index.js",
   "type": "module",
-  "private": true,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build ./index.ts --outdir ./dist",
+    "test": "bun test"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
