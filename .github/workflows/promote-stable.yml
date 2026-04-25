@@ -70,7 +70,11 @@ jobs:
           PARENT_CANARY_VERSION: ${{ steps.parent_canary.outputs.version }}
         run: |
           DIST_TAGS_JSON=$(npm view "${{ steps.package.outputs.name }}" dist-tags --json)
-          CURRENT_CANARY=$(node -e "const tags=JSON.parse(process.argv[1]);process.stdout.write(tags.canary||'')" "$DIST_TAGS_JSON")
+          if [[ -z "$DIST_TAGS_JSON" ]]; then
+            echo "Could not read dist-tags JSON for ${{ steps.package.outputs.name }}"
+            exit 1
+          fi
+          CURRENT_CANARY=$(DIST_TAGS_JSON="$DIST_TAGS_JSON" node -e "const raw=process.env.DIST_TAGS_JSON||''; let tags; try { tags=JSON.parse(raw); } catch (err) { console.error('Invalid dist-tags JSON for package ${{ steps.package.outputs.name }}'); console.error(raw); process.exit(1); } process.stdout.write(tags.canary||'');")
           if [[ -z "$CURRENT_CANARY" ]]; then
             echo "No canary dist-tag found for ${{ steps.package.outputs.name }}"
             exit 1
