@@ -152,7 +152,7 @@ jobs:
       - name: Open PR for next development baseline
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PR_TOKEN != '' && secrets.GH_PR_TOKEN || secrets.GITHUB_TOKEN }}
           commit-message: "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
           branch: chore/next-sprint-v${{ steps.next_version.outputs.next }}
           delete-branch: true
