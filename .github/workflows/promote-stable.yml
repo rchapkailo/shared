@@ -7,6 +7,10 @@ on:
         description: Exact canary version to promote (for example 0.1.0-canary.04-25-2026-18-36-08Z.pr10)
         required: true
         type: string
+      parent_green_e2e_commit_sha:
+        description: commit SHA of Parent repo with latest green e2e before release day
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -73,12 +77,17 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: npm view "${{ steps.package.outputs.name }}" dist-tags --json
 
+      - name: Read base version from checked out commit
+        id: base_version
+        run: |
+          git cat-file -e "${{ inputs.parent_green_e2e_commit_sha }}^{commit}"
+          BASE_VERSION=$(git show "${{ inputs.parent_green_e2e_commit_sha }}:package.json" | node -e "const pkg=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(pkg.version);")
+          echo "base=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Compute next development version
         id: next_version
-        env:
-          INPUT_CANARY_VERSION: ${{ inputs.canary_version }}
         run: |
-          BASE_VERSION="${INPUT_CANARY_VERSION%%-canary.*}"
+          BASE_VERSION="${{ steps.base_version.outputs.base }}"
           NEXT_VERSION=$(node -e "const [maj,min,pat]=process.argv[1].split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$BASE_VERSION")
           echo "next=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
 
