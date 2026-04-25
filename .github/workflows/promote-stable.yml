@@ -39,7 +39,9 @@ jobs:
 
       - name: Read package name
         id: package
-        run: echo "name=$(node -p \"require('./package.json').name\")" >> "$GITHUB_OUTPUT"
+        run: |
+          NAME=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!pkg.name){process.exit(2)}; process.stdout.write(pkg.name);")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Resolve canary version from parent commit
         id: parent_canary
