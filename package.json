@@ -1,5 +1,5 @@
 {
-  "name": "@romalvivua/shared",
+  "name": "@rchapkailo/shared",
   "version": "0.1.0",
   "module": "./dist/index.js",
   "main": "./dist/index.js",
