@@ -3,10 +3,6 @@ name: Promote Stable
 on:
   workflow_dispatch:
     inputs:
-      canary_version:
-        description: Exact canary version to promote (for example 0.1.0-canary.04-25-2026-18-36-08Z.pr10)
-        required: true
-        type: string
       parent_green_e2e_commit_sha:
         description: commit SHA of Parent repo with latest green e2e before release day
         required: true
@@ -33,28 +29,43 @@ jobs:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
 
+      - name: Check out parent repo at green e2e commit
+        uses: actions/checkout@v6
+        with:
+          repository: rchapkailo/parent
+          ref: ${{ inputs.parent_green_e2e_commit_sha }}
+          path: parent-source
+          fetch-depth: 1
+
       - name: Read package name
         id: package
         run: echo "name=$(node -p \"require('./package.json').name\")" >> "$GITHUB_OUTPUT"
 
-      - name: Validate canary input format
+      - name: Resolve canary version from parent commit
+        id: parent_canary
         env:
-          CANARY_VERSION: ${{ inputs.canary_version }}
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
         run: |
-          if [[ "$CANARY_VERSION" != *-canary.* ]]; then
-            echo "Input canary_version must include '-canary.' segment. Got: $CANARY_VERSION"
+          CANARY_VERSION=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('parent-source/package.json','utf8')); const dep = pkg.dependencies?.[process.env.PACKAGE_NAME] ?? pkg.devDependencies?.[process.env.PACKAGE_NAME] ?? pkg.peerDependencies?.[process.env.PACKAGE_NAME]; if(!dep){process.exit(1)}; process.stdout.write(dep);")
+          if [[ -z "$CANARY_VERSION" ]]; then
+            echo "Could not resolve dependency version for $PACKAGE_NAME from parent-source/package.json"
             exit 1
           fi
+          if [[ "$CANARY_VERSION" != *-canary.* ]]; then
+            echo "Resolved parent dependency version for $PACKAGE_NAME must include '-canary.' segment. Got: $CANARY_VERSION"
+            exit 1
+          fi
+          echo "version=$CANARY_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Verify canary package exists
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: npm view "${{ steps.package.outputs.name }}@${{ inputs.canary_version }}" version
+        run: npm view "${{ steps.package.outputs.name }}@${{ steps.parent_canary.outputs.version }}" version
 
-      - name: Verify input matches current canary tag
+      - name: Verify parent canary matches current canary tag
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-          INPUT_CANARY_VERSION: ${{ inputs.canary_version }}
+          PARENT_CANARY_VERSION: ${{ steps.parent_canary.outputs.version }}
         run: |
           DIST_TAGS_JSON=$(npm view "${{ steps.package.outputs.name }}" dist-tags --json)
           CURRENT_CANARY=$(node -e "const tags=JSON.parse(process.argv[1]);process.stdout.write(tags.canary||'')" "$DIST_TAGS_JSON")
@@ -62,32 +73,27 @@ jobs:
             echo "No canary dist-tag found for ${{ steps.package.outputs.name }}"
             exit 1
           fi
-          if [[ "$CURRENT_CANARY" != "$INPUT_CANARY_VERSION" ]]; then
-            echo "Input canary_version ($INPUT_CANARY_VERSION) does not match current canary tag ($CURRENT_CANARY)."
+          if [[ "$CURRENT_CANARY" != "$PARENT_CANARY_VERSION" ]]; then
+            echo "Parent canary version ($PARENT_CANARY_VERSION) does not match current canary tag ($CURRENT_CANARY)."
             exit 1
           fi
 
       - name: Promote canary to latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: npm dist-tag add "${{ steps.package.outputs.name }}@${{ inputs.canary_version }}" latest
+        run: npm dist-tag add "${{ steps.package.outputs.name }}@${{ steps.parent_canary.outputs.version }}" latest
 
       - name: Show resulting dist-tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: npm view "${{ steps.package.outputs.name }}" dist-tags --json
 
-      - name: Read base version from checked out commit
-        id: base_version
-        run: |
-          git cat-file -e "${{ inputs.parent_green_e2e_commit_sha }}^{commit}"
-          BASE_VERSION=$(git show "${{ inputs.parent_green_e2e_commit_sha }}:package.json" | node -e "const pkg=JSON.parse(require('fs').readFileSync(0,'utf8')); process.stdout.write(pkg.version);")
-          echo "base=$BASE_VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Compute next development version
         id: next_version
+        env:
+          PARENT_CANARY_VERSION: ${{ steps.parent_canary.outputs.version }}
         run: |
-          BASE_VERSION="${{ steps.base_version.outputs.base }}"
+          BASE_VERSION="${PARENT_CANARY_VERSION%%-canary.*}"
           NEXT_VERSION=$(node -e "const [maj,min,pat]=process.argv[1].split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$BASE_VERSION")
           echo "next=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
 
