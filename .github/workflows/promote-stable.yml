@@ -9,8 +9,9 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   packages: write
+  pull-requests: write
 
 jobs:
   promote-stable:
@@ -71,3 +72,35 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: npm view "${{ steps.package.outputs.name }}" dist-tags --json
+
+      - name: Compute next development version
+        id: next_version
+        env:
+          INPUT_CANARY_VERSION: ${{ inputs.canary_version }}
+        run: |
+          BASE_VERSION="${INPUT_CANARY_VERSION%%-canary.*}"
+          NEXT_VERSION=$(node -e "const [maj,min,pat]=process.argv[1].split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$BASE_VERSION")
+          echo "next=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bump package.json for next sprint
+        run: npm version "${{ steps.next_version.outputs.next }}" --no-git-tag-version
+
+      - name: Commit next development baseline
+        env:
+          NEXT_VERSION: ${{ steps.next_version.outputs.next }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add package.json
+
+      - name: Open PR for next development baseline
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: chore: start next sprint at v${{ steps.next_version.outputs.next }}
+          branch: chore/next-sprint-v${{ steps.next_version.outputs.next }}
+          delete-branch: true
+          title: chore: start next sprint at v${{ steps.next_version.outputs.next }}
+          body: |
+            This PR updates package.json to the next development baseline after promoting canary to stable.
+          base: main
