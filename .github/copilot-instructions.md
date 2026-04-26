@@ -20,6 +20,8 @@ When the user asks to create a PR, follow this exact sequence unless explicitly 
    - Prefer: `feat: ...`, `fix: ...`, `chore: ...`, `refactor: ...`, `test: ...`, `docs: ...`
    - Keep one clean commit per PR by default. Before opening or updating the PR, squash or amend incremental commits into that single semantic commit unless the user explicitly asks for multiple commits.
 6. Push branch and open a PR with clear title/body.
+   - PR description must include sections: `Summary`, `Validation`, and `Execution Report`.
+   - In `Execution Report`, fill values for `Agent name` and `LLM model` (do not leave placeholders).
 
 ## Execution Reporting
 
@@ -27,6 +29,7 @@ When the user asks to create a PR, follow this exact sequence unless explicitly 
    - `Agent name`: `<fill-agent-name>`
    - `LLM model`: `<fill-model-version>`
    - `Actions performed`: concise summary of files/commands changed
+- Mirror the same `Execution Report` block in the PR description whenever opening or updating a PR.
 
 ## Safety Rules
 
