@@ -3,8 +3,12 @@ name: Promote Stable
 on:
   workflow_dispatch:
     inputs:
-      parent_green_e2e_commit_sha:
-        description: commit SHA of Parent repo with latest green e2e before release day
+      release_branch:
+        description: release branch containing the approved release candidate, for example release/1.5
+        required: true
+        type: string
+      release_commit_sha:
+        description: exact commit SHA on the release branch that passed parent e2e
         required: true
         type: string
 
@@ -18,10 +22,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out main
+      - name: Check out release branch
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.release_branch }}
           fetch-depth: 0
+
+      - name: Verify release branch exists on origin
+        env:
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
+        run: |
+          if ! git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "Release branch '$RELEASE_BRANCH' does not exist on origin. Run cut-release first."
+            exit 1
+          fi
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -29,13 +43,18 @@ jobs:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
 
-      - name: Check out parent repo at green e2e commit
-        uses: actions/checkout@v6
-        with:
-          repository: rchapkailo/parent
-          ref: ${{ inputs.parent_green_e2e_commit_sha }}
-          path: parent-source
-          fetch-depth: 1
+      - name: Validate approved release commit
+        env:
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
+          RELEASE_COMMIT_SHA: ${{ inputs.release_commit_sha }}
+        run: |
+          if [[ "$RELEASE_BRANCH" != release/* ]]; then
+            echo "release_branch must start with 'release/'"
+            exit 1
+          fi
+          git rev-parse "$RELEASE_COMMIT_SHA^{commit}" >/dev/null 2>&1
+          git merge-base --is-ancestor "$RELEASE_COMMIT_SHA" "origin/$RELEASE_BRANCH"
+          git checkout -B release-candidate "$RELEASE_COMMIT_SHA"
 
       - name: Read package name
         id: package
@@ -43,49 +62,38 @@ jobs:
           NAME=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!pkg.name){process.exit(2)}; process.stdout.write(pkg.name);")
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve canary version from parent commit
-        id: parent_canary
-        env:
-          PACKAGE_NAME: ${{ steps.package.outputs.name }}
-        run: |
-          CANARY_VERSION=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('parent-source/package.json','utf8')); const dep = pkg.dependencies?.[process.env.PACKAGE_NAME] ?? pkg.devDependencies?.[process.env.PACKAGE_NAME] ?? pkg.peerDependencies?.[process.env.PACKAGE_NAME]; if(!dep){process.exit(1)}; process.stdout.write(dep);")
-          if [[ -z "$CANARY_VERSION" ]]; then
-            echo "Could not resolve dependency version for $PACKAGE_NAME from parent-source/package.json"
-            exit 1
-          fi
-          if [[ "$CANARY_VERSION" != *-canary.* ]]; then
-            echo "Resolved parent dependency version for $PACKAGE_NAME must include '-canary.' segment. Got: $CANARY_VERSION"
-            exit 1
-          fi
-          echo "version=$CANARY_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Install semantic-release tools
+        run: npm install --no-save semantic-release @semantic-release/commit-analyzer
 
-      - name: Verify canary package exists
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
-        run: |
-          for attempt in 1 2 3; do
-            if npm view "${{ steps.package.outputs.name }}@${{ steps.parent_canary.outputs.version }}" version; then
-              exit 0
-            fi
-            if [[ "$attempt" -lt 3 ]]; then
-              echo "Retrying canary existence check (attempt $((attempt + 1))/3)..."
-              sleep 2
-            fi
-          done
-          echo "Could not verify canary package version after 3 attempts."
-          exit 1
-
-      - name: Compute stable version from parent canary
+      - name: Analyze commits and calculate stable version
         id: stable_version
         env:
-          PARENT_CANARY_VERSION: ${{ steps.parent_canary.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          STABLE_VERSION="${PARENT_CANARY_VERSION%%-canary.*}"
-          if [[ ! "$STABLE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid stable base parsed from canary version: $PARENT_CANARY_VERSION"
+          cat > .releaserc.json <<'EOF'
+          {
+            "branches": ["release-candidate"],
+            "plugins": ["@semantic-release/commit-analyzer"]
+          }
+          EOF
+          SEMANTIC_RELEASE_OUTPUT=$(npx semantic-release --dry-run --no-ci --repository-url "https://github.com/${GITHUB_REPOSITORY}.git" 2>&1 || true)
+          printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT"
+          STABLE_VERSION=$(printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT" | sed -n 's/.*The next release version is //p' | tail -n 1)
+          if [[ -z "$STABLE_VERSION" ]]; then
+            echo "semantic-release did not calculate a releasable version for the approved release commit."
             exit 1
           fi
           echo "version=$STABLE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce major/minor-only stable promotion
+        env:
+          STABLE_VERSION: ${{ steps.stable_version.outputs.version }}
+        run: |
+          PATCH=$(node -e "const parts=(process.argv[1]||'').split('.').map(Number); if(parts.length!==3||parts.some(Number.isNaN)){process.exit(1)}; process.stdout.write(String(parts[2]));" "$STABLE_VERSION")
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Promote stable supports MAJOR/MINOR only. Computed version '$STABLE_VERSION' is a patch release. Use hotfix workflow for patch releases."
+            exit 1
+          fi
 
       - name: Verify stable version is not already published
         env:
@@ -105,46 +113,16 @@ jobs:
           npm version "${{ steps.stable_version.outputs.version }}" --no-git-tag-version
           npm publish
 
+      - name: Tag approved release commit
+        env:
+          STABLE_VERSION: ${{ steps.stable_version.outputs.version }}
+        run: |
+          git tag "v$STABLE_VERSION"
+          git push origin "v$STABLE_VERSION"
+
       - name: Show resulting stable version and dist-tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
         run: |
           npm view "${{ steps.package.outputs.name }}@${{ steps.stable_version.outputs.version }}" version
           npm view "${{ steps.package.outputs.name }}" dist-tags --json
-
-      - name: Compute next development version
-        id: next_version
-        env:
-          STABLE_VERSION: ${{ steps.stable_version.outputs.version }}
-        run: |
-          BASE_VERSION="$STABLE_VERSION"
-          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid stable version: $STABLE_VERSION"
-            exit 1
-          fi
-          NEXT_VERSION=$(node -e "const [maj,min,pat]=process.argv[1].split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$BASE_VERSION")
-          echo "next=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Bump package.json for next sprint
-        run: npm version "${{ steps.next_version.outputs.next }}" --no-git-tag-version
-
-      - name: Commit next development baseline
-        env:
-          NEXT_VERSION: ${{ steps.next_version.outputs.next }}
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add package.json
-          git commit -m "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
-
-      - name: Open PR for next development baseline
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.GH_PR_TOKEN != '' && secrets.GH_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          commit-message: "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
-          branch: chore/next-sprint-v${{ steps.next_version.outputs.next }}
-          delete-branch: true
-          title: "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
-          body: |
-            This PR updates package.json to the next development baseline after promoting canary to stable.
-          base: main
