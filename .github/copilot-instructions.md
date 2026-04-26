@@ -14,6 +14,8 @@ When the user asks to create a PR, follow this exact sequence unless explicitly 
    - If rebase conflicts occur, stop and ask before resolving.
 2. Create a new branch from updated main for the task.
    - Branch name format: `task/<short-slug>`
+   - Before reusing any existing local branch, check whether its related PR is already `MERGED` or `CLOSED`.
+   - If the prior PR is merged/closed, do not push new commits to that branch. Create a new branch from current `main` and continue there.
 3. Implement only requested changes.
 4. Run relevant checks/tests for touched code.
 5. Commit with a semantic Conventional Commit message.
@@ -35,6 +37,7 @@ When the user asks to create a PR, follow this exact sequence unless explicitly 
 
 - Never commit directly to `main`.
 - Never skip updating `main` first.
+- Never push follow-up work to a branch whose previous PR is already merged/closed; always branch fresh from latest `main`.
 - Keep commits scoped to the requested task.
 - Keep PR history clean: use amend/squash for follow-up fixes on the same PR unless the user requests separate commits.
 - If blockers appear (conflicts, missing permissions, failing required checks), report clearly and propose the next action.
