@@ -75,7 +75,7 @@ jobs:
           echo "Could not verify canary package version after 3 attempts."
           exit 1
 
-      - name: Verify parent canary matches current canary tag
+      - name: Verify parent canary is on same release line as current canary tag
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
           PARENT_CANARY_VERSION: ${{ steps.parent_canary.outputs.version }}
@@ -99,10 +99,24 @@ jobs:
             echo "No canary dist-tag found for ${{ steps.package.outputs.name }}. Continuing bootstrap promotion."
             exit 0
           fi
-          if [[ "$CURRENT_CANARY" != "$PARENT_CANARY_VERSION" ]]; then
-            echo "Parent canary version ($PARENT_CANARY_VERSION) does not match current canary tag ($CURRENT_CANARY)."
+
+          PARENT_BASE_VERSION="${PARENT_CANARY_VERSION%%-canary.*}"
+          CURRENT_BASE_VERSION="${CURRENT_CANARY%%-canary.*}"
+
+          if [[ "$PARENT_CANARY_VERSION" != *-canary.* ]]; then
+            echo "Parent canary version must include '-canary.': $PARENT_CANARY_VERSION"
             exit 1
           fi
+          if [[ "$CURRENT_CANARY" != *-canary.* ]]; then
+            echo "Current canary dist-tag must include '-canary.': $CURRENT_CANARY"
+            exit 1
+          fi
+          if [[ "$PARENT_BASE_VERSION" != "$CURRENT_BASE_VERSION" ]]; then
+            echo "Parent canary release line ($PARENT_BASE_VERSION) does not match current canary release line ($CURRENT_BASE_VERSION)."
+            exit 1
+          fi
+
+          echo "Parent and current canary are on the same release line ($PARENT_BASE_VERSION)."
 
       - name: Promote canary to latest
         env:
