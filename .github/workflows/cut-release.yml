@@ -1,0 +1,127 @@
+name: Cut Release Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit_sha:
+        description: commit SHA on main to cut the release branch from
+        required: true
+        type: string
+      next_development_version:
+        description: next baseline version for main after the release branch is cut, for example 1.5.1
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  cut-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install semantic-release tools
+        run: npm install --no-save semantic-release @semantic-release/commit-analyzer
+
+      - name: Validate inputs
+        env:
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+          NEXT_DEVELOPMENT_VERSION: ${{ inputs.next_development_version }}
+        run: |
+          if ! git rev-parse "$SOURCE_COMMIT_SHA^{commit}" >/dev/null 2>&1; then
+            echo "source_commit_sha is not a valid commit: $SOURCE_COMMIT_SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SOURCE_COMMIT_SHA" "origin/main"; then
+            echo "source_commit_sha must be on main history."
+            exit 1
+          fi
+          if [[ ! "$NEXT_DEVELOPMENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "next_development_version must be a plain semver like 1.5.1"
+            exit 1
+          fi
+
+      - name: Compute release branch from commits
+        id: release_branch
+        env:
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git checkout -B release-candidate "$SOURCE_COMMIT_SHA"
+          cat > .releaserc.json <<'EOF'
+          {
+            "branches": ["release-candidate"],
+            "plugins": ["@semantic-release/commit-analyzer"]
+          }
+          EOF
+          SEMANTIC_RELEASE_OUTPUT=$(npx semantic-release --dry-run --no-ci --repository-url "https://github.com/${GITHUB_REPOSITORY}.git" 2>&1 || true)
+          printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT"
+          COMPUTED_VERSION=$(printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT" | sed -n 's/.*The next release version is //p' | tail -n 1)
+          if [[ -z "$COMPUTED_VERSION" ]]; then
+            echo "Could not compute a release version from commits up to $SOURCE_COMMIT_SHA"
+            exit 1
+          fi
+          MAJOR=$(echo "$COMPUTED_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$COMPUTED_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$COMPUTED_VERSION" | cut -d. -f3)
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Computed version '$COMPUTED_VERSION' is patch-only. Use hotfix workflow for patch releases."
+            exit 1
+          fi
+          RELEASE_BRANCH="release/$MAJOR.$MINOR"
+          echo "name=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=$COMPUTED_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure computed release branch does not exist
+        env:
+          RELEASE_BRANCH: ${{ steps.release_branch.outputs.name }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "Branch $RELEASE_BRANCH already exists on origin."
+            exit 1
+          fi
+
+      - name: Create release branch from selected commit
+        env:
+          RELEASE_BRANCH: ${{ steps.release_branch.outputs.name }}
+          SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
+        run: git push origin "$SOURCE_COMMIT_SHA":refs/heads/$RELEASE_BRANCH
+
+      - name: Return to main
+        run: git checkout -B main origin/main
+
+      - name: Bump package.json for next sprint on main
+        run: npm version "${{ inputs.next_development_version }}" --no-git-tag-version
+
+      - name: Commit next development baseline
+        env:
+          NEXT_VERSION: ${{ inputs.next_development_version }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add package.json
+          git commit -m "chore: start next sprint at v$NEXT_VERSION"
+
+      - name: Open PR for next development baseline
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PR_TOKEN != '' && secrets.GH_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          commit-message: "chore: start next sprint at v${{ inputs.next_development_version }}"
+          branch: chore/next-sprint-v${{ inputs.next_development_version }}
+          delete-branch: true
+          title: "chore: start next sprint at v${{ inputs.next_development_version }}"
+          body: |
+            This PR bumps main to the next development baseline after cutting `${{ steps.release_branch.outputs.name }}` from `${{ inputs.source_commit_sha }}` (computed release version `${{ steps.release_branch.outputs.version }}`).
+          base: main

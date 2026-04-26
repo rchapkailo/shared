@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   publish-hotfix:
@@ -84,3 +85,35 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+
+      - name: Determine main baseline sync
+        id: baseline_sync
+        env:
+          HOTFIX_VERSION: ${{ inputs.version }}
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          MAIN_VERSION=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!pkg.version){process.exit(2)}; process.stdout.write(pkg.version);")
+          NEEDS_SYNC=$(node -e "const parse=(s)=>s.split('.').map(Number); const cmp=(a,b)=>{for(let i=0;i<3;i++){if(a[i]!==b[i]) return a[i]-b[i]} return 0}; const main=parse(process.argv[1]); const hotfix=parse(process.argv[2]); if(main.some(Number.isNaN)||hotfix.some(Number.isNaN)){process.exit(1)}; process.stdout.write(cmp(main,hotfix)<=0?'true':'false');" "$MAIN_VERSION" "$HOTFIX_VERSION")
+          NEXT_BASELINE=$(node -e "const [maj,min,pat]=(process.argv[1]||'').split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$HOTFIX_VERSION")
+          echo "main_version=$MAIN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "needs_sync=$NEEDS_SYNC" >> "$GITHUB_OUTPUT"
+          echo "next_baseline=$NEXT_BASELINE" >> "$GITHUB_OUTPUT"
+
+      - name: Bump main baseline after hotfix
+        if: steps.baseline_sync.outputs.needs_sync == 'true'
+        run: npm version "${{ steps.baseline_sync.outputs.next_baseline }}" --no-git-tag-version
+
+      - name: Open PR to sync main baseline after hotfix
+        if: steps.baseline_sync.outputs.needs_sync == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GH_PR_TOKEN != '' && secrets.GH_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          commit-message: "chore: sync main baseline after hotfix v${{ inputs.version }}"
+          branch: chore/sync-main-after-hotfix-v${{ steps.baseline_sync.outputs.next_baseline }}
+          delete-branch: true
+          title: "chore: sync main baseline to v${{ steps.baseline_sync.outputs.next_baseline }}"
+          body: |
+            main baseline was `${{ steps.baseline_sync.outputs.main_version }}` and hotfix `${{ inputs.version }}` was published.
+            This PR bumps main baseline to `${{ steps.baseline_sync.outputs.next_baseline }}` so canaries stay ahead of published hotfixes.
+          base: main
