@@ -7,10 +7,6 @@ on:
         description: commit SHA on main to cut the release branch from
         required: true
         type: string
-      next_development_version:
-        description: next baseline version for main after the release branch is cut, for example 1.5.1
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -38,7 +34,6 @@ jobs:
       - name: Validate inputs
         env:
           SOURCE_COMMIT_SHA: ${{ inputs.source_commit_sha }}
-          NEXT_DEVELOPMENT_VERSION: ${{ inputs.next_development_version }}
         run: |
           if ! git rev-parse "$SOURCE_COMMIT_SHA^{commit}" >/dev/null 2>&1; then
             echo "source_commit_sha is not a valid commit: $SOURCE_COMMIT_SHA"
@@ -46,10 +41,6 @@ jobs:
           fi
           if ! git merge-base --is-ancestor "$SOURCE_COMMIT_SHA" "origin/main"; then
             echo "source_commit_sha must be on main history."
-            exit 1
-          fi
-          if [[ ! "$NEXT_DEVELOPMENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "next_development_version must be a plain semver like 1.5.1"
             exit 1
           fi
 
@@ -84,6 +75,14 @@ jobs:
           echo "name=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
           echo "version=$COMPUTED_VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Compute next development baseline
+        id: next_baseline
+        env:
+          RELEASE_VERSION: ${{ steps.release_branch.outputs.version }}
+        run: |
+          NEXT_BASELINE=$(node -e "const [maj,min,pat]=(process.argv[1]||'').split('.').map(Number); if([maj,min,pat].some(Number.isNaN)){process.exit(1)}; process.stdout.write([maj,min,pat+1].join('.'));" "$RELEASE_VERSION")
+          echo "version=$NEXT_BASELINE" >> "$GITHUB_OUTPUT"
+
       - name: Ensure computed release branch does not exist
         env:
           RELEASE_BRANCH: ${{ steps.release_branch.outputs.name }}
@@ -103,11 +102,11 @@ jobs:
         run: git checkout -B main origin/main
 
       - name: Bump package.json for next sprint on main
-        run: npm version "${{ inputs.next_development_version }}" --no-git-tag-version
+        run: npm version "${{ steps.next_baseline.outputs.version }}" --no-git-tag-version
 
       - name: Commit next development baseline
         env:
-          NEXT_VERSION: ${{ inputs.next_development_version }}
+          NEXT_VERSION: ${{ steps.next_baseline.outputs.version }}
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
@@ -118,10 +117,10 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GH_PR_TOKEN != '' && secrets.GH_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          commit-message: "chore: start next sprint at v${{ inputs.next_development_version }}"
-          branch: chore/next-sprint-v${{ inputs.next_development_version }}
+          commit-message: "chore: start next sprint at v${{ steps.next_baseline.outputs.version }}"
+          branch: chore/next-sprint-v${{ steps.next_baseline.outputs.version }}
           delete-branch: true
-          title: "chore: start next sprint at v${{ inputs.next_development_version }}"
+          title: "chore: start next sprint at v${{ steps.next_baseline.outputs.version }}"
           body: |
-            This PR bumps main to the next development baseline after cutting `${{ steps.release_branch.outputs.name }}` from `${{ inputs.source_commit_sha }}` (computed release version `${{ steps.release_branch.outputs.version }}`).
+            This PR bumps main to `${{ steps.next_baseline.outputs.version }}` after cutting `${{ steps.release_branch.outputs.name }}` from `${{ inputs.source_commit_sha }}` (computed release version `${{ steps.release_branch.outputs.version }}`).
           base: main
