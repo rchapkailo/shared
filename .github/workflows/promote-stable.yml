@@ -162,6 +162,7 @@ jobs:
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add package.json
+          git commit -m "chore: start next sprint at v${{ steps.next_version.outputs.next }}"
 
       - name: Open PR for next development baseline
         uses: peter-evans/create-pull-request@v7
