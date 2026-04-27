@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 
-import { getRepoInfo } from "./index";
+import { getRepoMetadata } from "./index";
 
-describe("getRepoInfo", () => {
+describe("getRepoMetadata", () => {
   it("returns repo info for shared", () => {
-    const info = getRepoInfo();
+    const info = getRepoMetadata();
     expect(info.name).toBe("shared");
     expect(info.deps).toEqual([]);
   });
