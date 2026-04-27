@@ -2,15 +2,6 @@ name: Promote Stable
 
 on:
   workflow_dispatch:
-    inputs:
-      release_branch:
-        description: release branch containing the approved release candidate, for example release/1.5
-        required: true
-        type: string
-      release_commit_sha:
-        description: exact commit SHA on the release branch that passed parent e2e
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -22,20 +13,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out release branch
+      - name: Check out repository metadata
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.release_branch }}
+          ref: main
           fetch-depth: 0
-
-      - name: Verify release branch exists on origin
-        env:
-          RELEASE_BRANCH: ${{ inputs.release_branch }}
-        run: |
-          if ! git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
-            echo "Release branch '$RELEASE_BRANCH' does not exist on origin. Run cut-release first."
-            exit 1
-          fi
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -43,18 +25,28 @@ jobs:
           node-version: lts/*
           registry-url: https://npm.pkg.github.com
 
-      - name: Validate approved release commit
-        env:
-          RELEASE_BRANCH: ${{ inputs.release_branch }}
-          RELEASE_COMMIT_SHA: ${{ inputs.release_commit_sha }}
+      - name: Resolve latest release branch and commit
+        id: resolve_release_target
         run: |
-          if [[ "$RELEASE_BRANCH" != release/* ]]; then
-            echo "release_branch must start with 'release/'"
+          git fetch origin "+refs/heads/release/*:refs/remotes/origin/release/*"
+
+          RELEASE_BRANCH=$(git for-each-ref --format='%(refname:short)' refs/remotes/origin/release | sed 's#^origin/##' | sort -V | tail -n 1)
+          if [[ -z "$RELEASE_BRANCH" ]]; then
+            echo "No release/* branches found on origin. Run cut-release first."
             exit 1
           fi
-          git rev-parse "$RELEASE_COMMIT_SHA^{commit}" >/dev/null 2>&1
-          git merge-base --is-ancestor "$RELEASE_COMMIT_SHA" "origin/$RELEASE_BRANCH"
-          git checkout -B release-candidate "$RELEASE_COMMIT_SHA"
+
+          SOURCE_COMMIT_SHA=$(git rev-parse "origin/$RELEASE_BRANCH")
+          if [[ -z "$SOURCE_COMMIT_SHA" ]]; then
+            echo "Could not resolve HEAD commit for origin/$RELEASE_BRANCH."
+            exit 1
+          fi
+
+          git rev-parse "$SOURCE_COMMIT_SHA^{commit}" >/dev/null 2>&1
+          git checkout -B release-candidate "$SOURCE_COMMIT_SHA"
+
+          echo "release_branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "source_commit_sha=$SOURCE_COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Read package name
         id: package
@@ -62,23 +54,41 @@ jobs:
           NAME=$(node -e "const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!pkg.name){process.exit(2)}; process.stdout.write(pkg.name);")
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Install semantic-release tools
-        run: npm install --no-save semantic-release @semantic-release/commit-analyzer
-
       - name: Analyze commits and calculate stable version
         id: stable_version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT_SHA: ${{ steps.resolve_release_target.outputs.source_commit_sha }}
         run: |
-          cat > .releaserc.json <<'EOF'
+          # semantic-release dry-run verifies remote/branch permissions even in no-publish mode.
+          # Use a local bare repo as temporary remote to avoid GitHub token workflow-file push restrictions.
+          ANALYSIS_BRANCH="sr-analysis"
+          TEMP_GIT_DIR=$(mktemp -d)
+          TEMP_REMOTE="$TEMP_GIT_DIR/semantic-release-remote.git"
+          cleanup() {
+            rm -rf "$TEMP_GIT_DIR"
+          }
+          trap cleanup EXIT
+
+          git init --bare "$TEMP_REMOTE"
+          git push "file://$TEMP_REMOTE" "$SOURCE_COMMIT_SHA":refs/heads/$ANALYSIS_BRANCH
+          git --git-dir "$TEMP_REMOTE" symbolic-ref HEAD "refs/heads/$ANALYSIS_BRANCH"
+          git checkout -B "$ANALYSIS_BRANCH" "$SOURCE_COMMIT_SHA"
+
+          cat > .releaserc.json <<EOF
           {
-            "branches": ["release-candidate"],
+            "branches": ["$ANALYSIS_BRANCH"],
             "plugins": ["@semantic-release/commit-analyzer"]
           }
           EOF
-          SEMANTIC_RELEASE_OUTPUT=$(npx semantic-release --dry-run --no-ci --repository-url "https://github.com/${GITHUB_REPOSITORY}.git" 2>&1 || true)
+
+          export GITHUB_REF="refs/heads/$ANALYSIS_BRANCH"
+          export GITHUB_REF_NAME="$ANALYSIS_BRANCH"
+          export GITHUB_HEAD_REF=""
+          export GITHUB_BASE_REF=""
+
+          SEMANTIC_RELEASE_OUTPUT=$(npx --yes --package semantic-release --package @semantic-release/commit-analyzer semantic-release --dry-run --no-ci --branches "$ANALYSIS_BRANCH" --repository-url "file://$TEMP_REMOTE" 2>&1 || true)
           printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT"
-          STABLE_VERSION=$(printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT" | sed -n 's/.*The next release version is //p' | tail -n 1)
+          STABLE_VERSION=$(printf '%s\n' "$SEMANTIC_RELEASE_OUTPUT" | sed -nE 's/.*[Tt]he next release version is ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | tail -n 1)
           if [[ -z "$STABLE_VERSION" ]]; then
             echo "semantic-release did not calculate a releasable version for the approved release commit."
             exit 1
@@ -97,7 +107,7 @@ jobs:
 
       - name: Verify stable version is not already published
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN != '' && secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
           STABLE_VERSION: ${{ steps.stable_version.outputs.version }}
         run: |
           if npm view "${{ steps.package.outputs.name }}@$STABLE_VERSION" version >/dev/null 2>&1; then
@@ -108,7 +118,7 @@ jobs:
 
       - name: Publish stable package version
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN != '' && secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           npm version "${{ steps.stable_version.outputs.version }}" --no-git-tag-version
           npm publish
@@ -122,7 +132,7 @@ jobs:
 
       - name: Show resulting stable version and dist-tags
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN != '' && secrets.GH_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           npm view "${{ steps.package.outputs.name }}@${{ steps.stable_version.outputs.version }}" version
           npm view "${{ steps.package.outputs.name }}" dist-tags --json
